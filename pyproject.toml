@@ -1,0 +1,30 @@
+[project]
+name = "databricks-job-agent"
+version = "0.1.0"
+description = "Databricks Job Agent — end-to-end job matching agent on Databricks Free Edition"
+requires-python = ">=3.10"
+dependencies = [
+    "databricks-sdk",
+    "databricks-langchain",
+    "mlflow",
+    "gradio",
+    "PyPDF2",
+    "python-docx",
+    "hypothesis",
+    "pytest",
+    "requests",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: tests that require a live Databricks workspace (Spark, Delta Lake, Unity Catalog, Vector Search); skipped automatically outside that environment",
+]

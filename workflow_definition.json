@@ -1,0 +1,92 @@
+{
+  "name": "job_agent_pipeline",
+  "_comment_dag": "Tasks 1-4 form a sequential chain (reachability_probe -> ingest_listings -> enrich_listings -> sync_vector_index). Task 5 (run_evaluation) has no depends_on and is intentionally NOT part of the automatic dependency chain: it is meant to be triggered on demand (e.g. `databricks jobs run-now --job-id <id> --only run_evaluation`) ahead of promoting a new matching_agent version, per the deployment gate in Requirement 9.5-9.6. This job declares exactly 5 tasks total, satisfying the Free Edition <=5 concurrent job tasks limit (Requirement 11.6) trivially since the dependency chain (Tasks 1-4) plus the independent Task 5 never exceeds 5 tasks running at once.",
+  "_comment_compute": "No `job_clusters` and no `new_cluster`/`existing_cluster_id` on any task: every task runs on serverless compute by omitting cluster fields entirely, which is the Jobs API convention for serverless notebook tasks (Requirement 11.1).",
+  "_comment_warehouse": "Tasks 3 and 5 pass `warehouse_id` as a base_parameter so their notebooks (03_enrich_listings.py's ai_query path and 05_run_evaluation.py's draft_application check) can reach the single Free Edition 2X-Small SQL warehouse referenced by the `{{job.parameters.warehouse_id}}` job-level parameter (Requirement 11.7).",
+  "tags": {
+    "project": "databricks-job-agent"
+  },
+  "parameters": [
+    {
+      "name": "catalog",
+      "default": "job_agent"
+    },
+    {
+      "name": "warehouse_id",
+      "default": ""
+    }
+  ],
+  "tasks": [
+    {
+      "task_key": "reachability_probe",
+      "notebook_task": {
+        "notebook_path": "/Workspace/job_agent_pipeline/notebooks/01_reachability_probe",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}"
+        }
+      },
+      "timeout_seconds": 600,
+      "max_retries": 0
+    },
+    {
+      "task_key": "ingest_listings",
+      "depends_on": [
+        { "task_key": "reachability_probe" }
+      ],
+      "notebook_task": {
+        "notebook_path": "/Workspace/job_agent_pipeline/notebooks/02_ingest_listings",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}"
+        }
+      },
+      "timeout_seconds": 3600,
+      "max_retries": 1
+    },
+    {
+      "task_key": "enrich_listings",
+      "depends_on": [
+        { "task_key": "ingest_listings" }
+      ],
+      "notebook_task": {
+        "notebook_path": "/Workspace/job_agent_pipeline/notebooks/03_enrich_listings",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "warehouse_id": "{{job.parameters.warehouse_id}}"
+        }
+      },
+      "timeout_seconds": 3600,
+      "max_retries": 1
+    },
+    {
+      "task_key": "sync_vector_index",
+      "depends_on": [
+        { "task_key": "enrich_listings" }
+      ],
+      "notebook_task": {
+        "notebook_path": "/Workspace/job_agent_pipeline/notebooks/04_sync_vector_index",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}"
+        }
+      },
+      "timeout_seconds": 1800,
+      "max_retries": 1
+    },
+    {
+      "task_key": "run_evaluation",
+      "notebook_task": {
+        "notebook_path": "/Workspace/job_agent_pipeline/notebooks/05_run_evaluation",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "warehouse_id": "{{job.parameters.warehouse_id}}"
+        }
+      },
+      "timeout_seconds": 3600,
+      "max_retries": 0,
+      "_comment": "No depends_on: independent of Tasks 1-4. Intended for manual/on-demand runs (e.g. before promoting a new matching_agent version), not part of the automatic Tasks 1-4 trigger chain."
+    }
+  ],
+  "max_concurrent_runs": 1,
+  "queue": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,40 @@
+# Databricks App deployment configuration for `job-agent-app`.
+#
+# Deployed as 1 of at most 3 Databricks Apps allowed on Free Edition
+# (Requirement 11.4). The other two app "slots" are reserved for future
+# use — do not deploy additional Databricks Apps without first checking
+# the workspace's current app count.
+#
+# App name on the workspace: job-agent-app
+# Entry point: the Gradio Blocks app defined in `src/app/main.py`
+# (module-level `demo = build_app()`, launched via `demo.launch()` when
+# run as `__main__`) (Requirement 10.1).
+#
+# Runtime configuration the app needs (mirrors the constants hardcoded in
+# `src/app/main.py`) is supplied here as environment variables rather than
+# being hardcoded, so the same code can be pointed at a different
+# catalog/endpoint without a code change.
+command: ["python", "src/app/main.py"]
+
+env:
+  # Unity Catalog root used for all three-level table/volume/function names
+  # (Requirement 11.2).
+  - name: "CATALOG_NAME"
+    value: "job_agent"
+
+  # Model Serving endpoint hosting the deployed Matching Agent
+  # (see notebooks/07_register_deploy_agent.py), invoked by the app to
+  # find matches and draft applications (Requirements 7.3, 10.3).
+  - name: "MATCHING_AGENT_ENDPOINT_NAME"
+    value: "job-agent-matching"
+
+  # Unity Catalog Volume path the app stages uploaded CV files into before
+  # handing them to the CV parser (Requirement 5.2).
+  - name: "CV_UPLOADS_VOLUME_PATH"
+    value: "/Volumes/job_agent/volumes/cv_uploads"
+
+  # Free Edition SQL warehouse ID used to read Gold_Tier Delta_Tables and
+  # to resolve locations against the geocode lookup table (Requirement 10.3,
+  # 11.7). Populate with the workspace's single 2X-Small SQL warehouse ID.
+  - name: "SQL_WAREHOUSE_ID"
+    valueFrom: "sql_warehouse_id"
