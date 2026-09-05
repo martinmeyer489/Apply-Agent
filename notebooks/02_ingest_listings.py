@@ -82,8 +82,23 @@ FALLBACK_VOLUME_PATH = f"/Volumes/{CATALOG}/volumes/bundled_fallback"
 FALLBACK_VOLUME_CSV_PATH = f"{FALLBACK_VOLUME_PATH}/bundled_listings.csv"
 
 # Jobsuche API configuration
-JOBSUCHE_BASE_URL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service"
-JOBSUCHE_API_KEY = "jobboerse-jobsuche"  # Public client ID, no secret
+JOBSUCHE_BASE_URL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
+JOBSUCHE_HEADERS = {"X-API-Key": "jobboerse-jobsuche"}
+MAX_PAGE_SIZE = 500  # API rejects size > 500 with HTTP 400
+MAX_WINDOW = 10_000  # API silently returns [] once page * size > 10000
+
+# Multiple search param combinations to maximize results
+CANDIDATE_PARAMS = [
+    {"was": "Softwareentwickler"},
+    {"was": "Data Engineer"},
+    {"was": "*"},
+    {"wo": "Berlin"},
+    {"berufsfeld": "Informatik"},
+    {"was": "Softwareentwickler", "wo": "Berlin"},
+    {"was": "*", "zeitarbeit": "false"},
+    {"was": "*", "arbeitszeit": "vz"},
+    {"was": "*", "angebotsart": "1"},
+]
 
 print(f"Run ID:                 {RUN_ID}")
 print(f"Bronze listings table:  {BRONZE_LISTINGS_TABLE}")
@@ -232,12 +247,12 @@ def fetch_jobs_from_api(
     max_pages: int,
     timeout_seconds: int,
 ) -> list[dict]:
-    """Fetch job listings from the Jobsuche API.
+    """Fetch job listings from the Jobsuche API using multiple search param combinations.
 
     Args:
-        search_query: Job title search term (e.g. "Data Engineer").
-        location: Location search term (e.g. "Berlin" or "Deutschland").
-        max_pages: Maximum number of result pages to fetch.
+        search_query: Legacy param (ignored - uses CANDIDATE_PARAMS instead).
+        location: Legacy param (ignored - uses CANDIDATE_PARAMS instead).
+        max_pages: Maximum pages per search query (capped at MAX_WINDOW/MAX_PAGE_SIZE).
         timeout_seconds: Request timeout in seconds.
 
     Returns:
@@ -245,107 +260,109 @@ def fetch_jobs_from_api(
         job_description, location_text, source_url.
     """
     records = []
-    page = 1
-    page_size = 50  # Maximum allowed by API
+    seen_refnrs = set()  # Deduplicate by refnr
 
-    while page <= max_pages:
-        # Rate limit: be respectful to the public API
-        time.sleep(1.0)
+    # Cap max_pages to stay under MAX_WINDOW
+    effective_max_pages = min(max_pages, MAX_WINDOW // MAX_PAGE_SIZE)
 
-        # Search jobs endpoint
-        search_url = f"{JOBSUCHE_BASE_URL}/pc/v6/jobs"
-        params = {
-            "was": search_query,
-            "wo": location,
-            "page": page,
-            "size": page_size,
-            "veroeffentlichtseit": 30,  # Jobs from last 30 days
-        }
+    for query_params in CANDIDATE_PARAMS:
+        query_desc = ", ".join(f"{k}={v}" for k, v in query_params.items())
+        print(f"\nSearching: {query_desc}")
 
-        try:
-            response = requests.get(
-                search_url,
-                headers={"X-API-Key": JOBSUCHE_API_KEY},
-                params=params,
-                timeout=timeout_seconds,
-            )
-            response.raise_for_status()
-            search_data = response.json()
-        except Exception as exc:
-            api_errors.append({
-                "source_domain": "arbeitsagentur.de",
-                "error_message": f"Search API failed on page {page}: {exc}",
-                "error_type": "api_error",
-            })
-            print(f"  Page {page}: ERROR fetching search results: {exc}")
-            break
+        for page in range(1, effective_max_pages + 1):
+            # Rate limit: be respectful to the public API
+            time.sleep(0.5)
 
-        # Extract job refs from search response
-        stellenangebote = search_data.get("stellenangebote", [])
-        if not stellenangebote:
-            print(f"  Page {page}: No more results")
-            break
+            params = {**query_params, "page": page, "size": MAX_PAGE_SIZE}
 
-        print(f"  Page {page}: Found {len(stellenangebote)} job(s)")
-
-        for job in stellenangebote:
-            refnr = job.get("refnr")
-            if not refnr:
-                continue
-
-            # Fetch full job details
             try:
-                detail_url = f"{JOBSUCHE_BASE_URL}/pc/v4/jobdetails/{base64.b64encode(refnr.encode()).decode()}"
-                detail_response = requests.get(
-                    detail_url,
-                    headers={"X-API-Key": JOBSUCHE_API_KEY},
+                response = requests.get(
+                    JOBSUCHE_BASE_URL,
+                    headers=JOBSUCHE_HEADERS,
+                    params=params,
                     timeout=timeout_seconds,
                 )
-                detail_response.raise_for_status()
-                detail_data = detail_response.json()
+                response.raise_for_status()
+                search_data = response.json()
             except Exception as exc:
                 api_errors.append({
                     "source_domain": "arbeitsagentur.de",
-                    "error_message": f"Details API failed for refnr {refnr}: {exc}",
+                    "error_message": f"Search API failed for {query_desc} page {page}: {exc}",
                     "error_type": "api_error",
                 })
-                print(f"    Refnr {refnr}: ERROR fetching details, skipping")
-                continue
+                print(f"  Page {page}: ERROR: {exc}")
+                break
 
-            # Extract fields from detail response
-            job_title = detail_data.get("stellenangebotsTitel") or detail_data.get("titel", "")
-            company_name = detail_data.get("arbeitgeber", "")
-            job_description = detail_data.get("stellenangebotsBeschreibung") or detail_data.get("stellenbeschreibung", "")
+            # Extract job refs from search response
+            stellenangebote = search_data.get("stellenangebote", [])
+            if not stellenangebote:
+                print(f"  Page {page}: No more results")
+                break
 
-            # Extract location from arbeitsorte (can be multiple)
-            arbeitsorte = detail_data.get("arbeitsorte", [])
-            if arbeitsorte:
-                primary_loc = arbeitsorte[0]
-                location_parts = []
-                if primary_loc.get("plz"):
-                    location_parts.append(str(primary_loc["plz"]))
-                if primary_loc.get("ort"):
-                    location_parts.append(primary_loc["ort"])
-                if primary_loc.get("region"):
-                    location_parts.append(primary_loc["region"])
-                location_text = ", ".join(location_parts) if location_parts else location
-            else:
-                location_text = location
+            print(f"  Page {page}: Found {len(stellenangebote)} job(s)")
 
-            # Build a stable source URL (the BA job portal URL)
-            source_url = f"https://www.arbeitsagentur.de/jobsuche/jobdetails/{refnr}"
+            for job in stellenangebote:
+                refnr = job.get("refnr")
+                if not refnr or refnr in seen_refnrs:
+                    continue
+                seen_refnrs.add(refnr)
 
-            records.append({
-                "job_title": job_title,
-                "company_name": company_name,
-                "job_description": job_description,
-                "location_text": location_text,
-                "source_url": source_url,
-                # listing_id and timestamp added after validation
-            })
+                # Fetch full job details
+                try:
+                    detail_url = f"https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{base64.b64encode(refnr.encode()).decode()}"
+                    detail_response = requests.get(
+                        detail_url,
+                        headers=JOBSUCHE_HEADERS,
+                        timeout=timeout_seconds,
+                    )
+                    detail_response.raise_for_status()
+                    detail_data = detail_response.json()
+                except Exception as exc:
+                    api_errors.append({
+                        "source_domain": "arbeitsagentur.de",
+                        "error_message": f"Details API failed for refnr {refnr}: {exc}",
+                        "error_type": "api_error",
+                    })
+                    print(f"    Refnr {refnr}: ERROR fetching details, skipping")
+                    continue
 
-        page += 1
+                # Extract fields from detail response
+                job_title = detail_data.get("stellenangebotsTitel") or detail_data.get("titel", "")
+                company_name = detail_data.get("arbeitgeber", "")
+                job_description = detail_data.get("stellenangebotsBeschreibung") or detail_data.get("stellenbeschreibung", "")
 
+                # Extract location from arbeitsorte (can be multiple)
+                arbeitsorte = detail_data.get("arbeitsorte", [])
+                if arbeitsorte:
+                    primary_loc = arbeitsorte[0]
+                    location_parts = []
+                    if primary_loc.get("plz"):
+                        location_parts.append(str(primary_loc["plz"]))
+                    if primary_loc.get("ort"):
+                        location_parts.append(primary_loc["ort"])
+                    if primary_loc.get("region"):
+                        location_parts.append(primary_loc["region"])
+                    location_text = ", ".join(location_parts) if location_parts else query_params.get("wo", "Deutschland")
+                else:
+                    location_text = query_params.get("wo", "Deutschland")
+
+                # Build a stable source URL (the BA job portal URL)
+                source_url = f"https://www.arbeitsagentur.de/jobsuche/jobdetails/{refnr}"
+
+                records.append({
+                    "job_title": job_title,
+                    "company_name": company_name,
+                    "job_description": job_description,
+                    "location_text": location_text,
+                    "source_url": source_url,
+                })
+
+        # Stop if we have enough records
+        if len(records) >= 200:
+            print(f"\nReached {len(records)} records, stopping early")
+            break
+
+    print(f"\nTotal unique jobs fetched: {len(records)}")
     return records
 
 
@@ -358,8 +375,8 @@ else:
     # Fetch from Jobsuche API (tag records as 'api' ingestion mode)
     try:
         candidate_records = fetch_jobs_from_api(
-            search_query=JOB_SEARCH_QUERY,
-            location=LOCATION_SEARCH,
+            search_query=JOB_SEARCH_QUERY,  # legacy param, ignored
+            location=LOCATION_SEARCH,       # legacy param, ignored
             max_pages=MAX_PAGES,
             timeout_seconds=REQUEST_TIMEOUT_SECONDS,
         )
