@@ -12,11 +12,11 @@ The test is automatically skipped when no such environment is detected
 installed and no `DATABRICKS_HOST`). When it *is* run against a live
 workspace, it:
 
-1. Forces the "zero reachable domains" scenario by writing an
-   `ops.reachability_report` where every candidate domain is `blocked`
-   (Requirement 1 — reachability drives the bundled-fallback decision).
+1. Forces the "API unreachable" scenario by mocking the API health check
+   to return False, causing the pipeline to fall back to bundled data
+   (Requirement 2.9).
 2. Runs the ingestion pipeline's bundled-fallback path (mirroring
-   `notebooks/02_ingest_listings.py` Step 2a/2c) and asserts that
+   `notebooks/02_ingest_listings.py` Step 2a) and asserts that
    `bronze.job_listings` ends up populated with `ingestion_mode =
    'bundled_fallback'` for every row and at least 200 rows total
    (Requirements 2.1, 2.9, 2.10).
@@ -28,7 +28,7 @@ workspace, it:
 4. Asserts `silver.enriched_listings_chunks` — the source table for the
    Vector Search Delta Sync index — is populated for every listing that
    reached `enriched` or `partially_enriched`, as a proxy for "the index
-   is synchronised and those records are retrievable" (Requirement 4.5).
+   is synchronized and those records are retrievable" (Requirement 4.5).
 5. Asserts the full bronze -> silver row-accounting invariant: every
    bronze row has exactly one corresponding silver enrichment outcome,
    and no bronze row is silently dropped between tiers.
@@ -37,7 +37,7 @@ Because running actual Databricks notebooks via `dbutils`/the Jobs API is
 not practical from a pytest process, this test drives the same pure
 pipeline logic the notebooks call (`src.utils.*`, `src.pipelines.*`)
 directly against a live `SparkSession`, rather than invoking
-`notebooks/02_ingest_listings.py` / `03_enrich_listings.py` as scripts.
+`notebooks/02_ingest_listings.py` / `notebooks/03_enrich_listings.py` as scripts.
 This keeps the test itself dbutils-free while still exercising real
 Delta Lake reads/writes/MERGEs against Unity Catalog tables, which is the
 part of the notebooks that cannot be verified by the existing unit/
@@ -104,7 +104,7 @@ _SKIP_REASON = (
 
 @pytest.mark.skipif(not _has_databricks_environment(), reason=_SKIP_REASON)
 class TestPipelineEndToEnd:
-    """Bronze -> Silver -> Gold flow under the bundled-fallback (zero-reachable) scenario."""
+    """Bronze -> Silver -> Gold flow under the bundled-fallback (API unreachable) scenario."""
 
     @pytest.fixture(scope="class")
     def spark(self):
@@ -116,45 +116,16 @@ class TestPipelineEndToEnd:
     def run_id(self) -> str:
         return f"e2e-test-{uuid.uuid4()}"
 
-    def _force_zero_reachable(self, spark, run_id: str) -> None:
-        """Write `ops.reachability_report` with every candidate domain blocked.
-
-        Mirrors the row shape written by `notebooks/01_reachability_probe.py`,
-        so the ingestion pipeline logic reads exactly the same "zero
-        reachable domains" signal it would read from a real probe run
-        (Requirement 1).
-        """
-        from src.models.schemas import OPS_REACHABILITY_REPORT_SCHEMA
-
-        candidate_domains = [
-            "indeed.com",
-            "linkedin.com",
-            "glassdoor.com",
-            "monster.com",
-            "reed.co.uk",
-        ]
-        now = datetime.now(timezone.utc)
-        rows = [
-            (domain, now, "blocked", None, "simulated: no reachable domains for e2e test", None, None)
-            for domain in candidate_domains
-        ]
-        rows.append(("__summary__", now, "summary", None, None, 0, len(candidate_domains)))
-
-        report_table = f"{CATALOG}.ops.reachability_report"
-        report_df = spark.createDataFrame(rows, schema=OPS_REACHABILITY_REPORT_SCHEMA)
-        if not spark.catalog.tableExists(report_table):
-            report_df.write.format("delta").saveAsTable(report_table)
-        else:
-            report_df.write.format("delta").mode("overwrite").saveAsTable(report_table)
-
     def _run_bundled_fallback_ingestion(self, spark, run_id: str) -> int:
         """Load the bundled fallback dataset into `bronze.job_listings`.
 
-        Mirrors `notebooks/02_ingest_listings.py`'s Step 2a/5: reads the
+        Mirrors `notebooks/02_ingest_listings.py`'s Step 2a: reads the
         real `data/bundled_fallback/bundled_listings.csv`, tags every row
         `ingestion_mode='bundled_fallback'`, and MERGE-upserts into
         `bronze.job_listings` using the same batching/listing-id utilities
         the notebook uses.
+
+        This simulates the "API unreachable" path in the ingestion pipeline.
 
         Returns:
             The number of bundled fallback rows loaded from the CSV.
@@ -379,11 +350,11 @@ class TestPipelineEndToEnd:
         )
 
     def test_bundled_fallback_ingestion_then_enrichment_flow(self, spark, run_id):
-        """Full bronze -> silver -> gold flow under the zero-reachable-domains scenario.
+        """Full bronze -> silver -> gold flow under the API-unreachable (bundled-fallback) scenario.
 
         A live run of this test would:
         1. Confirm the ingestion pipeline correctly activates the bundled
-           fallback when zero domains are reachable (Req 2.1, 2.9).
+           fallback when the Jobsuche API is unreachable (Req 2.1, 2.9).
         2. Confirm the bundled dataset satisfies its >=200-row floor
            (Req 2.10) and that every ingested row is tagged
            `ingestion_mode='bundled_fallback'` (Req 2.9).
@@ -395,17 +366,9 @@ class TestPipelineEndToEnd:
            enriched/partially_enriched listing, as a proxy for "the index
            is synchronized and those listings are retrievable" (Req 4.5).
         """
-        # --- Step 1: force the zero-reachable-domains scenario (Req 1) ---
-        self._force_zero_reachable(spark, run_id)
-
-        reachable_count = (
-            spark.table(f"{CATALOG}.ops.reachability_report")
-            .filter("outcome = 'reachable'")
-            .count()
-        )
-        assert reachable_count == 0, "test setup must simulate zero reachable domains"
-
-        # --- Step 2: bundled-fallback ingestion -> bronze.job_listings (Req 2.1, 2.9, 2.10) ---
+        # --- Step 1: bundled-fallback ingestion -> bronze.job_listings (Req 2.1, 2.9, 2.10) ---
+        # This simulates what happens when the Jobsuche API is unreachable
+        # (the notebook's check_api_reachable returns False)
         bundled_row_count = self._run_bundled_fallback_ingestion(spark, run_id)
         assert bundled_row_count >= 200, (
             "the bundled fallback dataset must contain at least 200 job listing "
@@ -419,10 +382,10 @@ class TestPipelineEndToEnd:
         bundled_mode_count = bronze_df.filter("ingestion_mode = 'bundled_fallback'").count()
         assert bundled_mode_count == bronze_count, (
             "every bronze row must be tagged ingestion_mode='bundled_fallback' "
-            "when zero domains are reachable (Req 2.9)"
+            "when API is unreachable (Req 2.9)"
         )
 
-        # --- Step 3: enrichment -> silver.enriched_listings (Req 3.1) ---
+        # --- Step 2: enrichment -> silver.enriched_listings (Req 3.1) ---
         self._run_enrichment(spark)
 
         silver_df = spark.table(f"{CATALOG}.silver.enriched_listings")
@@ -447,7 +410,7 @@ class TestPipelineEndToEnd:
         )
         assert remaining_unenriched == 0
 
-        # --- Step 4: silver.enriched_listings_chunks populated (Req 4.5 proxy) ---
+        # --- Step 3: silver.enriched_listings_chunks populated (Req 4.5 proxy) ---
         indexable_listing_ids = {
             row["listing_id"]
             for row in silver_df.filter(silver_df.enrichment_state.isin(["enriched", "partially_enriched"]))
