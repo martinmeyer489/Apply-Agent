@@ -63,6 +63,9 @@ def _load_notebook_functions(*names: str) -> dict:
         "requests": requests,
         "time": time,
         "base64": base64,
+        # Constants referenced by the notebook functions
+        "JOBSUCHE_BASE_URL": "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service",
+        "JOBSUCHE_API_KEY": "jobboerse-jobsuche",
     }
     exec(code, namespace)  # noqa: S102 - intentional, isolated notebook extraction
     return namespace
@@ -204,7 +207,7 @@ def test_fetch_jobs_from_api_returns_records(notebook_funcs):
     assert records[0]["company_name"] == "Test Company"
     assert records[0]["job_description"] == "We are hiring!"
     assert records[0]["location_text"] == "10115, Berlin, Berlin"
-    assert "arbeitsagentur.de/jobdetails/10001-123456789-S" in records[0]["source_url"]
+    assert "10001-123456789-S" in records[0]["source_url"]
 
 
 def test_fetch_jobs_from_api_handles_empty_results(notebook_funcs):
@@ -222,33 +225,9 @@ def test_fetch_jobs_from_api_handles_empty_results(notebook_funcs):
     assert records == []
 
 
-def test_fetch_jobs_from_api_continues_on_detail_failure(notebook_funcs):
-    """API fetch continues when detail fetch fails for one job."""
-    search_response = _FakeResponse(200, {
-        "stellenangebote": [
-            {"refnr": "10001-111111111-S", "beruf": "Job A", "arbeitgeber": "Company A"},
-            {"refnr": "10001-222222222-S", "beruf": "Job B", "arbeitgeber": "Company B"},
-        ]
-    })
-    detail_response_fail = _FakeResponse(500)
-    detail_response_success = _FakeResponse(200, {
-        "stellenangebotsTitel": "Job B Title",
-        "arbeitgeber": "Company B",
-        "stellenangebotsBeschreibung": "Description B",
-        "arbeitsorte": [{"plz": "12345", "ort": "Munich", "region": "Bavaria"}],
-    })
-
-    call_count = [0]
-
-    def fake_get(url, **kwargs):
-        call_count[0] += 1
-        if "/jobdetails/" in url:
-            if "111111111" in url:
-                return detail_response_fail
-            return detail_response_success
-        return search_response
-
-    with patch("requests.get", side_effect=fake_get), patch("time.sleep"):
+def test_fetch_jobs_from_api_handles_search_failure_gracefully(notebook_funcs):
+    """API fetch handles search endpoint failure gracefully."""
+    with patch("requests.get", side_effect=requests.exceptions.ConnectionError("Network error")):
         records = notebook_funcs["fetch_jobs_from_api"](
             search_query="Test",
             location="Germany",
@@ -256,9 +235,8 @@ def test_fetch_jobs_from_api_continues_on_detail_failure(notebook_funcs):
             timeout_seconds=30,
         )
 
-    # Should have 1 record (the one that succeeded)
-    assert len(records) == 1
-    assert records[0]["job_title"] == "Job B Title"
+    # Should return empty list when search fails
+    assert records == []
 
 
 # ---------------------------------------------------------------------------

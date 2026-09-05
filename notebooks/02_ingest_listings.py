@@ -57,9 +57,9 @@ dbutils.widgets.text(
     "../data/bundled_fallback/bundled_listings.csv",
     "Path to the local bundled_listings.csv (relative to this notebook)",
 )
-dbutils.widgets.text("job_search_query", "Data Engineer", "Job title search term")
-dbutils.widgets.text("location_search", "Deutschland", "Location search term")
-dbutils.widgets.text("max_pages", "5", "Maximum pages to fetch from API")
+dbutils.widgets.text("job_search_query", "Softwareentwickler", "Job title search term")
+dbutils.widgets.text("location_search", "Berlin", "Location search term")
+dbutils.widgets.text("max_pages", "2", "Maximum pages to fetch from API")
 
 CATALOG = dbutils.widgets.get("catalog")
 BATCH_SIZE = int(dbutils.widgets.get("batch_size"))
@@ -126,6 +126,9 @@ def check_api_reachable(timeout_seconds: int = 10) -> bool:
 
 api_reachable = check_api_reachable(REQUEST_TIMEOUT_SECONDS)
 print(f"Jobsuche API reachable: {api_reachable}")
+
+# Print the search parameters being used
+print(f"Search parameters: was={JOB_SEARCH_QUERY}, wo={LOCATION_SEARCH}")
 
 # COMMAND ----------
 
@@ -362,10 +365,17 @@ else:
         )
         print(f"Fetched {len(candidate_records)} job(s) from Jobsuche API")
         
-        # Tag API records appropriately
-        for record in candidate_records:
-            record["ingestion_mode"] = "api"
-            record["source_domain"] = "arbeitsagentur.de"
+        # If API returned no results, fall back to bundled data (Req 2.9)
+        if len(candidate_records) == 0:
+            print("API returned no results — falling back to bundled dataset...")
+            ingestion_mode = "bundled_fallback"
+            candidate_records = load_bundled_fallback_records()
+            print(f"Loaded {len(candidate_records)} bundled fallback records.")
+        else:
+            # Tag API records appropriately
+            for record in candidate_records:
+                record["ingestion_mode"] = "api"
+                record["source_domain"] = "arbeitsagentur.de"
     except Exception as exc:
         # Any unhandled error triggers fallback
         api_errors.append({
@@ -409,7 +419,9 @@ for record in candidate_records:
         )
         continue
 
-    record["listing_id"] = derive_listing_id(record["source_url"])
+    # Only derive listing_id if not already present (e.g., from bundled fallback)
+    if "listing_id" not in record or not record["listing_id"]:
+        record["listing_id"] = derive_listing_id(record["source_url"])
     record["ingestion_timestamp"] = datetime.now(timezone.utc)
     valid_records.append(record)
 
