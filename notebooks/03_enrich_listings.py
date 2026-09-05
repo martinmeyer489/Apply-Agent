@@ -220,6 +220,13 @@ def extract_attributes_via_ai_query(batch: list[dict]) -> dict[str, dict]:
         """
     ).collect()
 
+    # Debug: print first few raw responses
+    print("DEBUG: Sample LLM responses:")
+    for i, row in enumerate(result_rows[:3]):
+        print(f"  listing_id: {row['listing_id']}")
+        print(f"  llm_response: {row['llm_response']!r}")
+        print()
+
     return {row["listing_id"]: _parse_llm_json(row["llm_response"]) for row in result_rows}
 
 
