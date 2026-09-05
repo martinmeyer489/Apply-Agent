@@ -60,7 +60,7 @@ from src.utils.retry import retry_with_backoff  # noqa: E402
 dbutils.widgets.text("catalog", "job_agent", "Catalog name")
 dbutils.widgets.text("run_id", "", "Workflow run ID (blank = auto-generate)")
 dbutils.widgets.text("batch_size", "500", "Max records per batch")
-dbutils.widgets.text("per_record_llm_threshold", "50", "Batches at/under this size use per-record LLM calls")
+dbutils.widgets.text("per_record_llm_threshold", "1000", "Batches at/under this size use per-record LLM calls")
 dbutils.widgets.text("llm_endpoint", "databricks-meta-llama-3-3-70b-instruct", "Foundation Model APIs chat endpoint")
 dbutils.widgets.text("record_timeout_seconds", "60", "Per-listing enrichment timeout (seconds)")
 dbutils.widgets.text("embedding_chunk_char_threshold", "6000", "embedding_text char length above which chunking is applied")
