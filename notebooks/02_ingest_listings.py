@@ -532,11 +532,11 @@ for batch_index, batch in enumerate(batches):
     batch_df = batch_df.withColumn("ingestion_timestamp", to_timestamp("ingestion_timestamp"))
 
     batch_urls = [r["source_url"] for r in batch]
+    bronze_df = spark.table(BRONZE_LISTINGS_TABLE)
     existing_urls = {
         row["source_url"]
-        for row in spark.table(BRONZE_LISTINGS_TABLE)
-        .select("source_url")
-        .filter(spark.table(BRONZE_LISTINGS_TABLE).source_url.isin(batch_urls))
+        for row in bronze_df.select("source_url")
+        .filter(bronze_df.source_url.isin(batch_urls))
         .collect()
     }
 
