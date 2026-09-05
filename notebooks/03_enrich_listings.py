@@ -214,8 +214,7 @@ def extract_attributes_via_ai_query(batch: list[dict]) -> dict[str, dict]:
                    'required_skills (array), seniority_level, employment_type, '
                    'industry, company_size_band. Description: ',
                    job_description
-                 ),
-                 responseFormat => 'json_object'
+                 )
                ) AS llm_response
         FROM _enrichment_ai_query_batch
         """
