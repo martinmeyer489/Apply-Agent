@@ -97,14 +97,27 @@ RETURN
         latitude,
         longitude,
         enrichment_state,
-        search_score AS similarity_score
-    FROM vector_search(
-        index => '{VS_INDEX_NAME}',
-        query_text => search_listings.query_text,
-        -- Req 4 AC7 / vector_search() preview cap: the SQL vector_search
-        -- function does not support num_results > 100, so clamp here.
-        num_results => least(coalesce(search_listings.max_results, 100), 100)
+        similarity_score
+    FROM (
+        SELECT
+            listing_id,
+            job_title,
+            company_name,
+            latitude,
+            longitude,
+            enrichment_state,
+            search_score AS similarity_score,
+            row_number() OVER (ORDER BY search_score DESC) AS _rn
+        FROM vector_search(
+            index => '{VS_INDEX_NAME}',
+            query_text => search_listings.query_text,
+            -- vector_search() requires num_results to be a foldable constant,
+            -- so request the preview maximum (100) here and apply the caller's
+            -- max_results cap below via row_number() (Req 4 AC7).
+            num_results => 100
+        )
     )
+    WHERE _rn <= least(coalesce(search_listings.max_results, 100), 100)
 """
 
 spark.sql(search_listings_sql)
@@ -179,13 +192,11 @@ RETURNS TABLE (
     commute_radius_km INT
 )
 COMMENT 'Retrieves the user profile including parsed CV fields, resolved home coordinates, and commute radius, filtered by profile_id.'
-LANGUAGE SQL
-AS $$
+RETURN
     SELECT t.skills, t.years_of_experience, t.job_title_history, t.qualifications_summary,
            t.home_latitude, t.home_longitude, t.home_location_name, t.commute_radius_km
     FROM {CATALOG}.gold.user_profiles AS t
     WHERE t.profile_id = get_user_profile.profile_id
-$$;
 """
 
 spark.sql(get_user_profile_sql)
