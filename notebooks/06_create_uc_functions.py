@@ -77,7 +77,7 @@ print(f"LLM endpoint:            {LLM_ENDPOINT}")
 search_listings_sql = f"""
 CREATE OR REPLACE FUNCTION {CATALOG}.gold.search_listings(
     query_text STRING COMMENT 'Concatenated skills, job titles, and qualifications to search for',
-    max_results INT DEFAULT 200 COMMENT 'Maximum number of candidates to return (capped at 200)'
+    max_results INT DEFAULT 100 COMMENT 'Maximum number of candidates to return (capped at 100)'
 )
 RETURNS TABLE (
     listing_id STRING,
@@ -88,45 +88,23 @@ RETURNS TABLE (
     enrichment_state STRING,
     similarity_score DOUBLE
 )
-COMMENT 'Searches the Vector Search index for job listings semantically similar to query_text. Returns at most min(max_results, 200) candidates ranked by similarity in descending order.'
-LANGUAGE PYTHON
-AS $$
-    from databricks.vector_search.client import VectorSearchClient
-
-    # Req 4 AC7: the index itself returns at most 200 results per query;
-    # clamp here too so a caller-supplied max_results above 200 (or a
-    # missing/negative value) can never exceed that ceiling.
-    capped_results = min(max_results, 200) if max_results else 200
-    capped_results = max(capped_results, 1)
-
-    vsc = VectorSearchClient()
-    index = vsc.get_index(
-        endpoint_name="{VS_ENDPOINT_NAME}",
-        index_name="{VS_INDEX_NAME}",
+COMMENT 'Searches the Vector Search index for job listings semantically similar to query_text. Returns at most min(max_results, 100) candidates ranked by similarity in descending order.'
+RETURN
+    SELECT
+        listing_id,
+        job_title,
+        company_name,
+        latitude,
+        longitude,
+        enrichment_state,
+        search_score AS similarity_score
+    FROM vector_search(
+        index => '{VS_INDEX_NAME}',
+        query_text => search_listings.query_text,
+        -- Req 4 AC7 / vector_search() preview cap: the SQL vector_search
+        -- function does not support num_results > 100, so clamp here.
+        num_results => least(coalesce(search_listings.max_results, 100), 100)
     )
-    results = index.similarity_search(
-        query_text=query_text,
-        columns=[
-            "listing_id",
-            "job_title",
-            "company_name",
-            "latitude",
-            "longitude",
-            "enrichment_state",
-        ],
-        num_results=capped_results,
-    )
-
-    # similarity_search returns {{"result": {{"data_array": [[...], ...]}}}};
-    # each row is [listing_id, job_title, company_name, latitude, longitude,
-    # enrichment_state, score] in the same order as `columns` plus a
-    # trailing similarity score column.
-    data_rows = results.get("result", {{}}).get("data_array", [])
-    return [
-        (row[0], row[1], row[2], row[3], row[4], row[5], row[6])
-        for row in data_rows
-    ]
-$$;
 """
 
 spark.sql(search_listings_sql)

@@ -201,9 +201,41 @@ print(f"Ensured Change Data Feed is enabled on {SOURCE_TABLE_NAME}")
 
 try:
     if index_exists(VS_ENDPOINT_NAME, INDEX_NAME):
-        print(f"Index '{INDEX_NAME}' already exists, triggering sync")
-        vsc.get_index(endpoint_name=VS_ENDPOINT_NAME, index_name=INDEX_NAME).sync()
-        print(f"Sync triggered for '{INDEX_NAME}'")
+        # The index already exists. It may still be provisioning from a prior
+        # run's initial (automatic) sync, in which case a manual .sync() call
+        # raises "Vector index ... is not ready." Wait for it to become ready
+        # first, then trigger a sync so newly enriched chunks are picked up.
+        index = vsc.get_index(endpoint_name=VS_ENDPOINT_NAME, index_name=INDEX_NAME)
+        print(f"Index '{INDEX_NAME}' already exists; waiting until it is ready before syncing")
+        from datetime import timedelta as _timedelta
+
+        try:
+            # Available on the VectorSearchClient index handle; blocks until
+            # the index finishes provisioning / its current pipeline settles.
+            index.wait_until_ready(verbose=True, timeout=_timedelta(minutes=30))
+        except AttributeError:
+            # Older client without wait_until_ready: poll describe() instead.
+            import time as _time
+
+            for _ in range(60):
+                status = index.describe().get("status", {})
+                if status.get("ready") is True:
+                    break
+                _time.sleep(30)
+
+        try:
+            index.sync()
+            print(f"Sync triggered for '{INDEX_NAME}'")
+        except Exception as sync_exc:  # noqa: BLE001
+            # A TRIGGERED index performs an automatic sync on creation and
+            # cannot accept a second sync while one is already running or while
+            # it is still settling. That is not a failure for our purposes —
+            # the index already reflects the latest chunks — so log and
+            # continue rather than failing the whole pipeline.
+            log_indexing_error(
+                f"Non-fatal: manual sync skipped for '{INDEX_NAME}': {sync_exc}"
+            )
+            print(f"Manual sync skipped (index busy/settling): {sync_exc}")
     else:
         vsc.create_delta_sync_index(
             endpoint_name=VS_ENDPOINT_NAME,
