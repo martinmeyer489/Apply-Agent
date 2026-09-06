@@ -1,0 +1,36 @@
+# On-demand evaluation job for the Matching Agent.
+#
+# Independent of the main pipeline DAG: run it before promoting a new
+# matching_agent version. Writes results to job_agent.ops.evaluation_results,
+# which the deployment gate in notebooks/07 consults.
+resources:
+  jobs:
+    job_evaluation:
+      name: "[${bundle.target}] job-embedding-showcase evaluation"
+      max_concurrent_runs: 1
+      tags:
+        project: databricks-job-agent
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: warehouse_id
+          default: ${var.sql_warehouse_id}
+      tasks:
+        - task_key: seed_evaluation_dataset
+          notebook_task:
+            notebook_path: ../notebooks/05a_seed_evaluation_dataset.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: run_evaluation
+          depends_on:
+            - task_key: seed_evaluation_dataset
+          notebook_task:
+            notebook_path: ../notebooks/05_run_evaluation.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              warehouse_id: "{{job.parameters.warehouse_id}}"
+          timeout_seconds: 3600
+          max_retries: 0

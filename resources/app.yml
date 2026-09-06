@@ -1,0 +1,47 @@
+# Databricks App: the Gradio chat frontend for the Matching Agent.
+#
+# Deployed as 1 of at most 3 Free Edition apps. The app source is the whole
+# repo (source_code_path: ..) so `src/app/main.py` and its `src/...` imports
+# resolve; the entry command and environment mirror the repo-root app.yaml.
+#
+# Declared app resources (serving_endpoint, sql_warehouse) grant the app's
+# service principal permission to invoke the Matching Agent endpoint and the
+# SQL warehouse at run time; the SQL warehouse id is surfaced to the app code
+# via the SQL_WAREHOUSE_ID env var whose value_from references the named
+# sql_warehouse app resource.
+resources:
+  apps:
+    job_agent_app:
+      name: job-agent-app
+      description: Job-matching agent chat UI (Gradio) for the job-embedding-showcase.
+      source_code_path: ..
+
+      resources:
+        # NOTE: a `serving_endpoint` app-resource binding to
+        # ${var.matching_agent_endpoint_name} is intentionally omitted here
+        # because that endpoint is created at run time by
+        # notebooks/07_register_deploy_agent.py, and the Apps API rejects a
+        # binding to a non-existent endpoint at deploy time. The app instead
+        # reads the endpoint name from the MATCHING_AGENT_ENDPOINT_NAME env
+        # var below and invokes it via the app service principal. Once the
+        # pipeline has created the endpoint, the binding can be added back
+        # here for an explicit CAN_QUERY grant.
+        - name: sql_warehouse
+          description: Free Edition serverless SQL warehouse used to read Gold tables.
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+
+      config:
+        command:
+          - python
+          - src/app/main.py
+        env:
+          - name: CATALOG_NAME
+            value: ${var.catalog}
+          - name: MATCHING_AGENT_ENDPOINT_NAME
+            value: ${var.matching_agent_endpoint_name}
+          - name: CV_UPLOADS_VOLUME_PATH
+            value: /Volumes/${var.catalog}/volumes/cv_uploads
+          - name: SQL_WAREHOUSE_ID
+            value_from: sql_warehouse

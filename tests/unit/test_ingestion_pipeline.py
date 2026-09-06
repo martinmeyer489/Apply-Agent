@@ -63,9 +63,20 @@ def _load_notebook_functions(*names: str) -> dict:
         "requests": requests,
         "time": time,
         "base64": base64,
-        # Constants referenced by the notebook functions
-        "JOBSUCHE_BASE_URL": "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service",
-        "JOBSUCHE_API_KEY": "jobboerse-jobsuche",
+        # Constants referenced by the notebook functions. `check_api_reachable`
+        # and `fetch_jobs_from_api` read the search endpoint URL and the
+        # X-API-Key header from these module-level names; mirror the notebook's
+        # own definitions (JOBSUCHE_BASE_URL already includes the /pc/v6/jobs
+        # search path, and auth is carried via JOBSUCHE_HEADERS).
+        "JOBSUCHE_BASE_URL": "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs",
+        "JOBSUCHE_HEADERS": {"X-API-Key": "jobboerse-jobsuche"},
+        # Pagination/window guards and the search-parameter combinations that
+        # fetch_jobs_from_api iterates over (mirrors the notebook constants).
+        "MAX_PAGE_SIZE": 500,
+        "MAX_WINDOW": 10_000,
+        "CANDIDATE_PARAMS": [{"was": "Data Engineer"}],
+        # fetch_jobs_from_api appends to a module-level api_errors list.
+        "api_errors": [],
     }
     exec(code, namespace)  # noqa: S102 - intentional, isolated notebook extraction
     return namespace

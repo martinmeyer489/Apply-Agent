@@ -1,0 +1,50 @@
+# Databricks Asset Bundle for the job-embedding-showcase.
+#
+# Wraps the existing job-matching implementation (notebooks/, src/agent,
+# src/app) as declarative resources so that jobs, the Vector Search
+# endpoint/index, and the Databricks App are all created via
+# `databricks bundle deploy` — nothing is created by hand in the UI.
+#
+# The Model Serving endpoint (job-agent-matching) is intentionally NOT a
+# declarative `model_serving_endpoints` resource: it serves a Unity Catalog
+# model version that only exists *after* the agent is logged and registered
+# at run time (notebooks/07_register_deploy_agent.py). Its deployment is
+# therefore driven imperatively from that job task, which is the correct
+# ordering for a runtime-produced artifact.
+bundle:
+  name: job-embedding-showcase
+  # Use the direct deployment engine (calls Databricks APIs directly; this is
+  # the current default, set explicitly for faster, Terraform-free iteration).
+  # See https://docs.databricks.com/aws/en/dev-tools/bundles/direct
+  engine: direct
+
+# Split resource definitions into focused files under resources/.
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog used for all three-level names.
+    default: job_agent
+  sql_warehouse_id:
+    description: >-
+      SQL warehouse ID used by the enrichment/evaluation notebooks, the
+      draft_application UC function, and the app. Defaults to the single
+      Free Edition 2X-Small serverless warehouse in this workspace.
+    default: bac0214363ba544d
+  vs_endpoint_name:
+    description: Mosaic AI Vector Search endpoint name.
+    default: job_agent_vs_endpoint
+  matching_agent_endpoint_name:
+    description: Model Serving endpoint hosting the deployed Matching Agent.
+    default: job-agent-matching
+
+targets:
+  dev:
+    # Development mode: deployments are source-linked (notebooks run in place
+    # from the synced workspace files, no rebuild), and resources are
+    # prefixed/isolated per developer so repeated deploys are safe.
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-5b49b1e2-7f96.cloud.databricks.com

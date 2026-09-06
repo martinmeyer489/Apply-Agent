@@ -1,0 +1,14 @@
+# Mosaic AI Vector Search endpoint.
+#
+# Declared here (no data dependency), so it is created at deploy time.
+# The Delta Sync *index* on top of it (job_agent.silver.enriched_listings_index)
+# is created by notebooks/04_sync_vector_index.py instead of declaratively,
+# because the index requires its source table
+# (silver.enriched_listings_chunks) to already be populated — an ordering
+# that only holds after the enrich task runs. The notebook creates the index
+# idempotently and triggers a sync on subsequent runs.
+resources:
+  vector_search_endpoints:
+    vs_endpoint:
+      name: ${var.vs_endpoint_name}
+      endpoint_type: STANDARD

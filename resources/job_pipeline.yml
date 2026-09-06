@@ -1,0 +1,110 @@
+# End-to-end pipeline job for the job-embedding-showcase.
+#
+# One sequential serverless DAG (each task runs on serverless compute by
+# omitting cluster fields). The chain runs at most one task at a time, so it
+# trivially stays under the Free Edition <=5 concurrent-task limit even
+# though it declares more than five tasks total.
+#
+# Task order:
+#   setup_catalog
+#     -> load_reference_data
+#     -> ingest_listings
+#     -> enrich_listings
+#     -> sync_vector_index
+#     -> create_uc_functions
+#     -> register_deploy_agent
+#
+# run_evaluation is deliberately independent (no depends_on): it is meant to
+# be triggered on demand ahead of promoting a new matching_agent version.
+resources:
+  jobs:
+    job_pipeline:
+      name: "[${bundle.target}] job-embedding-showcase pipeline"
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      tags:
+        project: databricks-job-agent
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: warehouse_id
+          default: ${var.sql_warehouse_id}
+        - name: vs_endpoint_name
+          default: ${var.vs_endpoint_name}
+        - name: matching_agent_endpoint_name
+          default: ${var.matching_agent_endpoint_name}
+
+      tasks:
+        - task_key: setup_catalog
+          notebook_task:
+            notebook_path: ../notebooks/00_setup_catalog.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: load_reference_data
+          depends_on:
+            - task_key: setup_catalog
+          notebook_task:
+            notebook_path: ../notebooks/00a_load_reference_data.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: ingest_listings
+          depends_on:
+            - task_key: load_reference_data
+          notebook_task:
+            notebook_path: ../notebooks/02_ingest_listings.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+          timeout_seconds: 3600
+          max_retries: 1
+
+        - task_key: enrich_listings
+          depends_on:
+            - task_key: ingest_listings
+          notebook_task:
+            notebook_path: ../notebooks/03_enrich_listings.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              warehouse_id: "{{job.parameters.warehouse_id}}"
+          timeout_seconds: 3600
+          max_retries: 1
+
+        - task_key: sync_vector_index
+          depends_on:
+            - task_key: enrich_listings
+          notebook_task:
+            notebook_path: ../notebooks/04_sync_vector_index.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              vs_endpoint_name: "{{job.parameters.vs_endpoint_name}}"
+          timeout_seconds: 3600
+          max_retries: 1
+
+        - task_key: create_uc_functions
+          depends_on:
+            - task_key: sync_vector_index
+          notebook_task:
+            notebook_path: ../notebooks/06_create_uc_functions.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              vs_endpoint_name: "{{job.parameters.vs_endpoint_name}}"
+              warehouse_id: "{{job.parameters.warehouse_id}}"
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: register_deploy_agent
+          depends_on:
+            - task_key: create_uc_functions
+          notebook_task:
+            notebook_path: ../notebooks/07_register_deploy_agent.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              serving_endpoint_name: "{{job.parameters.matching_agent_endpoint_name}}"
+          timeout_seconds: 3600
+          max_retries: 0

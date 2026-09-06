@@ -125,12 +125,18 @@ import requests
 
 
 def check_api_reachable(timeout_seconds: int = 10) -> bool:
-    """Check if the Jobsuche API is reachable via a simple query."""
-    test_url = f"{JOBSUCHE_BASE_URL}/pc/v6/jobs?was=test&size=1"
+    """Check if the Jobsuche API is reachable via a simple query.
+
+    `JOBSUCHE_BASE_URL` already points at the `/pc/v6/jobs` search endpoint,
+    so the probe only appends query parameters (not another path segment),
+    and it reuses the module-level `JOBSUCHE_HEADERS` (X-API-Key) rather than
+    a separate, undefined key constant.
+    """
     try:
         response = requests.get(
-            test_url,
-            headers={"X-API-Key": JOBSUCHE_API_KEY},
+            JOBSUCHE_BASE_URL,
+            headers=JOBSUCHE_HEADERS,
+            params={"was": "test", "size": 1},
             timeout=timeout_seconds,
         )
         # Any 2xx or 4xx response means the API is reachable (401/403 just means no results)
