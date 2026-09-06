@@ -187,6 +187,18 @@ def index_exists(endpoint_name: str, index_name: str) -> bool:
         return False
 
 
+# A Delta Sync index requires its source table to expose row-level changes.
+# Enable Change Data Feed on the chunks table (idempotent) before creating
+# the index, otherwise create_delta_sync_index fails with:
+#   "... is not a valid Vector Search source. Please retry after enabling
+#    change data feed (delta.enableChangeDataFeed = true) ..."
+spark.sql(
+    f"ALTER TABLE {SOURCE_TABLE_NAME} "
+    "SET TBLPROPERTIES (delta.enableChangeDataFeed = true)"
+)
+print(f"Ensured Change Data Feed is enabled on {SOURCE_TABLE_NAME}")
+
+
 try:
     if index_exists(VS_ENDPOINT_NAME, INDEX_NAME):
         print(f"Index '{INDEX_NAME}' already exists, triggering sync")

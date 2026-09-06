@@ -99,6 +99,16 @@ for table_key, table_schema in TABLE_SCHEMAS.items():
     else:
         print(f"Table {full_table_name} already exists, skipping")
 
+# The Vector Search Delta Sync index is built over
+# `silver.enriched_listings_chunks`, which requires row-level change tracking
+# on its source table. Enable Change Data Feed (idempotent) so notebook 04's
+# create_delta_sync_index call succeeds.
+spark.sql(
+    f"ALTER TABLE {CATALOG_NAME}.silver.enriched_listings_chunks "
+    "SET TBLPROPERTIES (delta.enableChangeDataFeed = true)"
+)
+print(f"Enabled Change Data Feed on {CATALOG_NAME}.silver.enriched_listings_chunks")
+
 # COMMAND ----------
 
 # MAGIC %md
